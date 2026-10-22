@@ -215,7 +215,9 @@ try {
 
     # course sites on Notion (notionCourses in config.json)
     $notion = Join-Path $root 'notion-sync.ps1'
-    if ($cfg.notionCourses -and (Test-Path $notion)) { & $notion -OutRoot $outRoot }
+    # only for courses you are enrolled in (matched by the Moodle course number in notionCourses)
+    $enrolled = @($courses | ForEach-Object { "$($_.fullname) $($_.shortname) $($_.idnumber)" })
+    if ($cfg.notionCourses -and (Test-Path $notion)) { & $notion -OutRoot $outRoot -Enrolled $enrolled }
 }
 catch {
     $msg = $_.Exception.Message -replace $(if ($token) { [regex]::Escape([string]$token) } else { '(?!)' }), '[key]'

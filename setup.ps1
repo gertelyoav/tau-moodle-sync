@@ -111,11 +111,6 @@ if (-not $target) {
 }
 $cfg.moodleFolder = $target
 
-$opt = @($cfg.notionCourses)
-if ($opt.Count) {
-    $names = ($opt | ForEach-Object { $_.name }) -join ', '
-    if (-not (Ask-YesNo "Also copy the course website(s) on Notion ($names)? Answer y only if you take that course")) { $cfg.notionCourses = @() }
-}
 $cfg | ConvertTo-Json -Depth 5 | Set-Content -Path $cfgFile -Encoding UTF8
 Write-Host "OK - files will be saved in $target" -ForegroundColor Green
 

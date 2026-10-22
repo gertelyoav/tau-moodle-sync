@@ -1,10 +1,11 @@
 ﻿# notion-sync.ps1
-# Copies public Notion course sites (notionCourses in config.json) into the Moodle folder:
+# Copies public Notion course sites (notionCourses in config.json) into the Moodle folder - only
+# for courses you are enrolled in on Moodle (each site's "moodleCourse" number, when given):
 # every page becomes a Markdown file (formulas kept as LaTeX), attached PDFs are downloaded.
 # Adds the pages to index.json and reports new pages in updates.json (for notifications).
 # Called at the end of moodle-sync.ps1 (every hour). Can also be run on its own.
 
-param([string]$OutRoot = '')
+param([string]$OutRoot = '', [string[]]$Enrolled = @())
 
 $ErrorActionPreference = 'Stop'
 $ProgressPreference    = 'SilentlyContinue'
@@ -158,8 +159,11 @@ function Render-Block([string]$id, [int]$depth, $out, $pagesFound) {
 # ---------- main ----------
 try {
     $cfg = Get-Content (Join-Path $root 'config.json') -Raw -Encoding UTF8 | ConvertFrom-Json
-    $sites = @($cfg.notionCourses)
-    if (-not $sites -or -not $sites[0]) { exit 0 }
+    $sites = @($cfg.notionCourses | Where-Object { $_ })
+    if ($Enrolled.Count) {
+        $sites = @($sites | Where-Object { -not $_.PSObject.Properties['moodleCourse'] -or ($Enrolled -match [regex]::Escape([string]$_.moodleCourse)) })
+    }
+    if (-not $sites.Count) { exit 0 }
     [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 
     if (-not $OutRoot) {
