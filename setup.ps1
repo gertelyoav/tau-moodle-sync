@@ -98,8 +98,9 @@ if ($drives.Count -eq 1) {
 } elseif ($drives.Count -gt 1) {
     Write-Host 'Found several Google Drive accounts:'
     for ($i = 0; $i -lt $drives.Count; $i++) { Write-Host "  $($i + 1). $($drives[$i])" }
-    $n = [int](Read-Host "Which one should hold the course files? (1-$($drives.Count))")
-    $target = Join-Path $drives[$n - 1] 'Moodle'
+    Write-Host '  0. none of these (choose another folder)'
+    do { $n = (Read-Host "Which one should hold the course files? (0-$($drives.Count))").Trim() } until ($n -match '^\d+$' -and [int]$n -le $drives.Count)
+    if ([int]$n -gt 0) { $target = Join-Path $drives[[int]$n - 1] 'Moodle' }
 } else {
     Write-Host 'Google Drive for desktop was not found. Install it (https://www.google.com/drive/download/) so Gemini/Claude can read the files,' -ForegroundColor Yellow
     Write-Host 'or the files will be saved locally in this folder.' -ForegroundColor Yellow

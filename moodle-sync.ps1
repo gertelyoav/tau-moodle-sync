@@ -57,7 +57,7 @@ try {
     $token = ''
     $tokenFile = Join-Path $root 'token.dat'
     if (Test-Path $tokenFile) {
-        $sec = Get-Content $tokenFile -Raw | ConvertTo-SecureString
+        $sec = (Get-Content $tokenFile -Raw).Trim() | ConvertTo-SecureString
         $token = [Runtime.InteropServices.Marshal]::PtrToStringBSTR([Runtime.InteropServices.Marshal]::SecureStringToBSTR($sec))
     } elseif ($cfg.PSObject.Properties['moodleToken']) { $token = [string]$cfg.moodleToken }
     $base  = if ($cfg.moodleUrl) { ([string]$cfg.moodleUrl).TrimEnd('/') } else { 'https://moodle.tau.ac.il' }
@@ -177,7 +177,7 @@ try {
                 $val = "$($gi.gradeformatted)|$($gi.gradedategraded)"
                 if (Test-Seen "grade:$($gi.id)" $val) { Add-Update $cname 'grade' ([string]$gi.itemname) "ציון: $($gi.gradeformatted)" }
             }
-        } catch { Write-Log "could not read grades for '$($c.fullname)': $($_.Exception.Message -replace [regex]::Escape($token), '[key]')" }
+        } catch { Write-Log "could not read grades for '$($c.fullname)': $($_.Exception.Message -replace $(if ($token) { [regex]::Escape($token) } else { '(?!)' }), '[key]')" }
     }
 
     # files that moved to a new path (e.g. renumbered because the lecturer reordered the course page):
@@ -218,7 +218,7 @@ try {
     if ($cfg.notionCourses -and (Test-Path $notion)) { & $notion -OutRoot $outRoot }
 }
 catch {
-    $msg = $_.Exception.Message -replace [regex]::Escape([string]$token), '[key]'
+    $msg = $_.Exception.Message -replace $(if ($token) { [regex]::Escape([string]$token) } else { '(?!)' }), '[key]'
     Write-Log "ERROR: $msg"
     try {
         New-Item -ItemType Directory -Force -Path $outRoot | Out-Null
