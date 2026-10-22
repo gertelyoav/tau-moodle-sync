@@ -23,7 +23,9 @@ $needKey = $true
 if (Test-Path $tokenFile) { $needKey = Ask-YesNo 'A Moodle key is already saved. Replace it?' }
 if ($needKey) {
     Write-Host 'Opening the Moodle "Security keys" page in your browser (log in if asked).'
-    Write-Host 'Copy the key in the row "Moodle mobile web service" (if there is no key, open the Moodle app/website once, then reload).'
+    Write-Host 'Copy the existing key in the row "Moodle mobile web service". Do NOT click Reset.'
+    Write-Host 'If there is no key there, log in to the Moodle app on your phone once, then reload the page.'
+    Write-Host '(If you do click Reset, the old key stops working: you will need to log in again in the Moodle app on your phone/tablet.)' -ForegroundColor Yellow
     Start-Process "$base/user/managetoken.php"
     while ($true) {
         $sec = Read-Host 'Paste the key here and press Enter (it will not be shown)' -AsSecureString
