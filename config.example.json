@@ -1,0 +1,11 @@
+{
+  "moodleUrl": "https://moodle.tau.ac.il",
+  "moodleFolder": "",
+  "moodleMaxFileMB": 100,
+  "notionCourses": [
+    {
+      "name": "מבוא לאופטימיזציה למדעי המחשב",
+      "pageId": "2254ab7a-c384-82c6-91c4-81d421436109"
+    }
+  ]
+}
