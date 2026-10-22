@@ -21,25 +21,70 @@ Write-Host '=== Step 1/3: your Moodle key ===' -ForegroundColor Cyan
 $tokenFile = Join-Path $root 'token.dat'
 $needKey = $true
 if (Test-Path $tokenFile) { $needKey = Ask-YesNo 'A Moodle key is already saved. Replace it?' }
-if ($needKey) {
-    Write-Host 'Opening the Moodle "Security keys" page in your browser (log in if asked).'
-    Write-Host 'Copy the existing key in the row "Moodle mobile web service". Do NOT click Reset.'
-    Write-Host 'If there is no key there, log in to the Moodle app on your phone once, then reload the page.'
-    Write-Host '(If you do click Reset, the old key stops working: you will need to log in again in the Moodle app on your phone/tablet.)' -ForegroundColor Yellow
-    Start-Process "$base/user/managetoken.php"
-    while ($true) {
-        $sec = Read-Host 'Paste the key here and press Enter (it will not be shown)' -AsSecureString
-        $plain = [Runtime.InteropServices.Marshal]::PtrToStringBSTR([Runtime.InteropServices.Marshal]::SecureStringToBSTR($sec)).Trim()
-        try {
-            $r = Invoke-RestMethod -Uri "$base/webservice/rest/server.php" -Method Post -TimeoutSec 60 `
-                   -Body @{ wstoken = $plain; wsfunction = 'core_webservice_get_site_info'; moodlewsrestformat = 'json' }
-            if ($r.PSObject.Properties['exception']) { throw $r.message }
-            Write-Host "OK - connected to Moodle as $($r.fullname)" -ForegroundColor Green
-            $sec | ConvertFrom-SecureString | Set-Content -Path $tokenFile
-            break
-        } catch { Write-Host "That key did not work ($($_.Exception.Message)). Try again." -ForegroundColor Yellow }
+function Test-MoodleKey([string]$key) {
+    $r = Invoke-RestMethod -Uri "$base/webservice/rest/server.php" -Method Post -TimeoutSec 60 `
+           -Body @{ wstoken = $key; wsfunction = 'core_webservice_get_site_info'; moodlewsrestformat = 'json' }
+    if ($r.PSObject.Properties['exception']) { throw $r.message }
+    return $r
+}
+
+function Get-KeyViaBrowser {
+    # Moodle shows key names, not the keys. The official app gets its key by opening
+    # admin/tool/mobile/launch.php, which redirects to moodlemobile://token=... with your EXISTING key
+    # (nothing is reset, the phone app keeps working). We register a temporary handler for
+    # moodlemobile:// (current user only, removed right after) to catch that redirect.
+    $catch   = Join-Path $env:TEMP ('moodle-key-' + [guid]::NewGuid().ToString('N'))
+    $handler = "$catch.ps1"; $out = "$catch.txt"
+    Set-Content -Path $handler -Encoding UTF8 -Value "param([string]`$u) Set-Content -LiteralPath '$out' -Value `$u"
+    $reg = 'HKCU\Software\Classes\moodlemobile'; $backup = "$catch.reg"
+    $k = 'HKCU:\Software\Classes\moodlemobile'
+    $hadKey = Test-Path $k
+    if ($hadKey) { cmd.exe /c "reg export `"$reg`" `"$backup`" /y >nul 2>&1" }
+    try {
+        New-Item -Path "$k\shell\open\command" -Force | Out-Null
+        Set-ItemProperty -Path $k -Name '(default)' -Value 'URL:moodlemobile'
+        Set-ItemProperty -Path $k -Name 'URL Protocol' -Value ''
+        Set-ItemProperty -Path "$k\shell\open\command" -Name '(default)' -Value "powershell.exe -NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File `"$handler`" `"%1`""
+        $passport = Get-Random -Minimum 100000 -Maximum 999999
+        Start-Process "$base/admin/tool/mobile/launch.php?service=moodle_mobile_app&passport=$passport&urlscheme=moodlemobile"
+        Write-Host 'Your browser opened Moodle. Log in if asked.'
+        Write-Host 'When the browser asks to open "Windows PowerShell" (or "Open link?"), click Open / Allow.' -ForegroundColor Yellow
+        for ($i = 0; $i -lt 180 -and -not (Test-Path $out); $i++) { Start-Sleep -Seconds 1 }
+        if (-not (Test-Path $out)) { return $null }
+        $url = (Get-Content -LiteralPath $out -Raw).Trim()
+        $raw = $url -replace '^moodlemobile://token=', '' -replace '[^A-Za-z0-9+/=]', ''
+        foreach ($b64 in @($raw, $raw.TrimEnd('/'))) {
+            try {
+                while ($b64.Length % 4) { $b64 += '=' }
+                $parts = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($b64)) -split ':::'
+                if ($parts.Count -ge 2 -and $parts[1] -match '^[0-9a-f]{32}$') { return $parts[1] }
+            } catch {}
+        }
+        return $null
+    } finally {
+        Remove-Item -LiteralPath $out, $handler -Force -ErrorAction SilentlyContinue
+        Remove-Item -Path $k -Recurse -Force -ErrorAction SilentlyContinue
+        if ($hadKey -and (Test-Path $backup)) { cmd.exe /c "reg import `"$backup`" >nul 2>&1" }
+        Remove-Item -LiteralPath $backup -Force -ErrorAction SilentlyContinue
     }
-    $plain = $null
+}
+
+if ($needKey) {
+    Write-Host 'Getting your existing Moodle key (nothing is reset - the Moodle app on your phone keeps working).'
+    Write-Host 'Do NOT click "Reset" on the Moodle "Security keys" page: that would log out the Moodle app on your phone/tablet.' -ForegroundColor Yellow
+    $saved = $false
+    for ($try = 1; $try -le 2 -and -not $saved; $try++) {
+        $key = Get-KeyViaBrowser
+        if (-not $key) { Write-Host 'Did not receive the key from the browser.' -ForegroundColor Yellow; continue }
+        try {
+            $r = Test-MoodleKey $key
+            Write-Host "OK - connected to Moodle as $($r.fullname)" -ForegroundColor Green
+            ConvertTo-SecureString $key -AsPlainText -Force | ConvertFrom-SecureString | Set-Content -Path $tokenFile
+            $saved = $true
+        } catch { Write-Host "The key did not work ($($_.Exception.Message))." -ForegroundColor Yellow }
+        $key = $null
+    }
+    if (-not $saved) { Write-Host 'Could not get the Moodle key. Run setup.cmd again, or see "Troubleshooting" in README.md.' -ForegroundColor Red; exit 1 }
 }
 
 Write-Host ''
