@@ -198,6 +198,28 @@ try {
         }
     }
 
+    # ---- deadlines (assignments + quizzes with a due/close date) -> deadlines.json, read by the Google Tasks script ----
+    try {
+        $cnames = @{}; foreach ($c in $courses) { $cnames[[string]$c.id] = (Get-CourseName ([string]$c.fullname)) }
+        $cparams = @{}; $i = 0; foreach ($c in $courses) { $cparams["courseids[$i]"] = $c.id; $i++ }
+        $deadlines = New-Object System.Collections.ArrayList
+        $a = Invoke-Moodle 'mod_assign_get_assignments' $cparams
+        foreach ($ac in @($a.courses)) {
+            foreach ($as in @($ac.assignments)) {
+                if (-not $as -or -not [int64]$as.duedate) { continue }
+                [void]$deadlines.Add([pscustomobject][ordered]@{ id = "assign:$($as.id)"; type = 'assign'; course = $cnames[[string]$ac.id]; name = [string]$as.name; due = [int64]$as.duedate; url = "$base/mod/assign/view.php?id=$($as.cmid)" })
+            }
+        }
+        try {
+            $q = Invoke-Moodle 'mod_quiz_get_quizzes_by_courses' $cparams
+            foreach ($qz in @($q.quizzes)) {
+                if (-not $qz -or -not [int64]$qz.timeclose) { continue }
+                [void]$deadlines.Add([pscustomobject][ordered]@{ id = "quiz:$($qz.id)"; type = 'quiz'; course = $cnames[[string]$qz.course]; name = [string]$qz.name; due = [int64]$qz.timeclose; url = "$base/mod/quiz/view.php?id=$($qz.coursemodule)" })
+            }
+        } catch { Write-Log "could not read quizzes: $($_.Exception.Message -replace $(if ($token) { [regex]::Escape($token) } else { '(?!)' }), '[key]')" }
+        ConvertTo-Json -InputObject ([object[]]$deadlines.ToArray()) -Depth 3 | Set-Content -Path (Join-Path $outRoot 'deadlines.json') -Encoding UTF8
+    } catch { Write-Log "could not read deadlines: $($_.Exception.Message -replace $(if ($token) { [regex]::Escape($token) } else { '(?!)' }), '[key]')" }
+
     # keep the last 200 updates
     $keep = @($updates | Select-Object -Last 200)
     ConvertTo-Json -InputObject ([object[]]$keep) -Depth 4 | Set-Content -Path $updFile -Encoding UTF8
