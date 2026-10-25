@@ -119,6 +119,7 @@ try {
     $typeNames = @{ quiz = 'בוחן'; assign = 'מטלה'; resource = 'קובץ'; folder = 'תיקיית קבצים'; url = 'קישור'; forum = 'פורום'; page = 'דף'; lti = 'כלי חיצוני' }
 
     $courseDirs = New-Object System.Collections.ArrayList
+    $cmPlace = @{}   # course module id -> its section folder and number (for assignment attachments)
     foreach ($c in $courses) {
         $cname = Get-CourseName ([string]$c.fullname)
         $courseDir = Join-Path $outRoot (Get-SafeName $cname)
@@ -132,6 +133,7 @@ try {
             $modNo = 0
             foreach ($m in $s.modules) {
                 if ($m.modname -ne 'label') { $modNo++ }
+                $cmPlace[[string]$m.id] = @{ dir = $secDir; prefix = ('{0:D2} - ' -f $modNo); course = $cname; section = [string]$s.name; activity = [string]$m.name }
                 if ($m.PSObject.Properties['uservisible'] -and -not $m.uservisible) { continue }
                 if ($m.modname -ne 'label' -and (Test-Seen "mod:$($m.id)" '1')) {
                     $tn = if ($typeNames.ContainsKey($m.modname)) { $typeNames[$m.modname] } else { [string]$m.modname }
@@ -208,6 +210,33 @@ try {
             foreach ($as in @($ac.assignments)) {
                 if (-not $as -or -not [int64]$as.duedate) { continue }
                 [void]$deadlines.Add([pscustomobject][ordered]@{ id = "assign:$($as.id)"; type = 'assign'; course = $cnames[[string]$ac.id]; name = [string]$as.name; due = [int64]$as.duedate; url = "$base/mod/assign/view.php?id=$($as.cmid)" })
+            }
+        }
+        # files attached to assignments (the homework sheet itself) -> saved next to the assignment's place on the course page
+        foreach ($ac in @($a.courses)) {
+            foreach ($as in @($ac.assignments)) {
+                $pl = if ($as) { $cmPlace[[string]$as.cmid] } else { $null }
+                if (-not $pl) { continue }
+                foreach ($f in @($as.introattachments)) {
+                    if (-not $f -or -not $f.fileurl -or [double]$f.filesize / 1MB -gt $maxMB) { continue }
+                    try {
+                        $dest = Join-Path $pl.dir ($pl.prefix + (Get-SafeName $f.filename))
+                        $rel  = $dest.Substring($outRoot.TrimEnd('\','/').Length + 1)
+                        $prev = $known[$rel]
+                        $upToDate = $prev -and ([int64]$prev.timemodified -eq [int64]$f.timemodified) -and (Test-Path -LiteralPath $dest)
+                        $dl = if ($prev) { $prev.downloadedAt } else { $null }
+                        if (-not $upToDate) {
+                            New-Item -ItemType Directory -Force -Path $pl.dir | Out-Null
+                            $url = [string]$f.fileurl
+                            $url += $(if ($url.Contains('?')) { '&' } else { '?' }) + 'token=' + $token
+                            $tmpDl = [IO.Path]::GetTempFileName(); Invoke-WebRequest -Uri $url -OutFile $tmpDl -UseBasicParsing -TimeoutSec 300; Move-Item -LiteralPath $tmpDl -Destination $dest -Force
+                            $dl = (Get-Date).ToString('yyyy-MM-dd HH:mm'); $new++
+                            Write-Log "downloaded: $rel"
+                            if ($prev -and -not $firstRun) { Add-Update $pl.course 'file' ([string]$f.filename) "קובץ עודכן ב-$($pl.activity)" }
+                        }
+                        [void]$entries.Add([pscustomobject][ordered]@{ path = $rel; course = $pl.course; section = $pl.section; activity = $pl.activity; fileKey = "$($as.cmid)|intro|$($f.filename)"; timemodified = [int64]$f.timemodified; size = [int64]$f.filesize; downloadedAt = $dl })
+                    } catch { Write-Log "could not download an attachment of '$($as.name)': $($_.Exception.Message -replace $(if ($token) { [regex]::Escape($token) } else { '(?!)' }), '[key]')" }
+                }
             }
         }
         try {
