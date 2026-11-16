@@ -202,6 +202,47 @@ Test-Case 'Save-Config keeps lists, Hebrew and the UTF-8 BOM' {
     } finally { Remove-Item -LiteralPath $tmp -Force -ErrorAction SilentlyContinue }
 }
 
+Test-Case 'Get-FreshUpdates picks only what this run found' {
+    $list = @(
+        [pscustomobject]@{ detectedAt = '2026-11-16T14:00:05+02:00'; title = 'old' },
+        [pscustomobject]@{ detectedAt = '2026-11-16T15:00:02+02:00'; title = 'new' },
+        [pscustomobject]@{ detectedAt = 'not a date'; title = 'broken' }
+    )
+    Assert-Equal 'new' ((Get-FreshUpdates $list '2026-11-16T15:00:02+02:00') | ForEach-Object { $_.title }) 'fresh items'
+    Assert-Equal '' ((Get-FreshUpdates @() '2026-11-16T15:00:02+02:00') | ForEach-Object { $_.title }) 'empty list'
+}
+
+Test-Case 'a new update read back from updates.json triggers a notification' {
+    # Uses the real Read-JsonList from moodle-sync.ps1, the way the sync reads updates.json before firing the routine.
+    $ast = [System.Management.Automation.Language.Parser]::ParseFile((Join-Path $repo 'moodle-sync.ps1'), [ref]$null, [ref]$null)
+    $fn = $ast.FindAll({ param($a) $a -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $a.Name -eq 'Read-JsonList' }, $true) | Select-Object -First 1
+    Assert-True $fn 'Read-JsonList not found in moodle-sync.ps1'
+    . ([scriptblock]::Create($fn.Extent.Text))
+    $tmp = Join-Path ([IO.Path]::GetTempPath()) ('upd-test-' + [guid]::NewGuid().ToString('N') + '.json')
+    try {
+        $items = @(
+            [pscustomobject][ordered]@{ detectedAt = '2026-11-16T14:00:05+02:00'; course = 'א'; type = 'file'; title = 'old'; detail = '' },
+            [pscustomobject][ordered]@{ detectedAt = '2026-11-16T15:00:02+02:00'; course = 'ב'; type = 'activity'; title = 'intro_prob_ex4'; detail = '' }
+        )
+        ConvertTo-Json -InputObject ([object[]]$items) -Depth 4 | Set-Content -Path $tmp -Encoding UTF8
+        $fresh = Get-FreshUpdates (Read-JsonList $tmp) '2026-11-16T15:00:02+02:00'
+        Assert-Equal 'intro_prob_ex4' ($fresh | ForEach-Object { $_.title }) 'fresh items read from the file'
+    } finally { Remove-Item -LiteralPath $tmp -Force -ErrorAction SilentlyContinue }
+}
+
+Test-Case 'no script pipes Read-JsonList straight into another command' {
+    # Read-JsonList returns ,$array: piped directly, the whole list arrives as ONE object.
+    $bad = @()
+    foreach ($f in 'moodle-sync.ps1', 'notion-sync.ps1', 'setup.ps1') {
+        $n = 0
+        foreach ($line in ((Read-Text $f) -split "`r?`n")) {
+            $n++
+            if ($line -match 'Read-JsonList\s+\$\w+\s*\|') { $bad += "${f}:$n" }
+        }
+    }
+    Assert-True (-not $bad.Count) ('wrap it in parentheses or pass it as an argument: ' + ($bad -join ', '))
+}
+
 Write-Host ''
 $color = 'Green'; if ($script:failed) { $color = 'Red' }
 Write-Host ("{0} passed, {1} failed" -f $script:passed, $script:failed) -ForegroundColor $color

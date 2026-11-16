@@ -295,9 +295,7 @@ try {
     # (claudeRoutineId in config.json + the routine's API token, saved encrypted by save-claude-token.cmd)
     $rtFile = Join-Path $root 'claude-routine-token.dat'
     if ($cfg.claudeRoutineId -and (Test-Path $rtFile)) {
-        $runStart = [DateTimeOffset]::Parse($nowIso)
-        $fresh = @(Read-JsonList $updFile | Where-Object {
-            try { [DateTimeOffset]::Parse([string]$_.detectedAt) -ge $runStart } catch { $false } })
+        $fresh = Get-FreshUpdates (Read-JsonList $updFile) $nowIso
         if ($fresh.Count) {
             try {
                 $sec = (Get-Content $rtFile -Raw).Trim() | ConvertTo-SecureString

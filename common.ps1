@@ -55,6 +55,19 @@ function Resolve-SkipAnswer($courses, [string]$answer, $default) {
     return ,$out
 }
 
+# The updates (from updates.json) detected at or after $runStartIso - what this run should notify about.
+# Takes the list as an argument: piping Read-JsonList's result into Where-Object passes the whole list as ONE
+# object (it returns ,$array), which made every run look like it had nothing new.
+function Get-FreshUpdates($updates, [string]$runStartIso) {
+    $start = [DateTimeOffset]::Parse($runStartIso)
+    $out = @()
+    foreach ($u in @($updates)) {
+        if ($null -eq $u) { continue }
+        try { if ([DateTimeOffset]::Parse([string]$u.detectedAt) -ge $start) { $out += $u } } catch {}
+    }
+    return ,$out
+}
+
 # A Claude routine id as shown in the routine's URL: trig_ followed by letters and digits.
 function Test-RoutineId([string]$id) { return [bool]($id -match '^trig_[A-Za-z0-9]+$') }
 
