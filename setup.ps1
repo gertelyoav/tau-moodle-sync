@@ -126,15 +126,16 @@ try {
     $site    = Test-MoodleKey $key
     $courses = @(Invoke-RestMethod -Uri "$base/webservice/rest/server.php" -Method Post -TimeoutSec 60 `
                    -Body @{ wstoken = $key; wsfunction = 'core_enrol_get_users_courses'; userid = $site.userid; moodlewsrestformat = 'json' } | ForEach-Object { $_ })
+    if (@($courses | Where-Object { $_.PSObject.Properties['exception'] }).Count) { throw $courses[0].message }
     $current = @($cfg.moodleSkipCourses | Where-Object { $_ } | ForEach-Object { [string]$_ })
     $default = $current
     if (-not $current.Count) { $default = Get-SuggestedSkips $courses }
     Write-Host 'All your Moodle courses are synced. You can leave out courses you do not need:'
     for ($i = 0; $i -lt $courses.Count; $i++) {
-        $mark = ''; if (Test-CourseSkipped $courses[$i] $default) { $mark = '   <- suggested: leave out' }
+        $mark = ''; if (Test-CourseSkipped $courses[$i] $default) { $mark = '   <- leave out' }
         Write-Host ("  {0}. {1}{2}" -f ($i + 1), (Get-CourseName ([string]$courses[$i].fullname)), $mark)
     }
-    $hint = 'Enter = sync all'; if ($default.Count) { $hint = 'Enter = leave out the marked courses, 0 = sync all' }
+    $hint = 'Enter = sync all'; if ($default.Count) { $hint = 'Enter = leave out the marked ones, 0 = sync all' }
     $skip = $null
     do {
         $a = Read-Host "Numbers of the courses to leave out, separated by commas ($hint)"
