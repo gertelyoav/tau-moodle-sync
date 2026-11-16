@@ -36,14 +36,8 @@ function Read-JsonList([string]$path) {
     return ,$out.ToArray()
 }
 
-function Get-CourseName([string]$full) {
-    # "0366201001 - מבוא להסתברות0366201001 - Introduction to Probability Theory" -> "מבוא להסתברות (0366201001)"
-    $m = [regex]::Match($full, '^\s*(\d+)\s*-\s*(.+?)\s*\1\s*-\s*.+$')
-    if ($m.Success) { return "$($m.Groups[2].Value.Trim()) ($($m.Groups[1].Value))" }
-    $m = [regex]::Match($full, '^\s*(\d+)\s*-\s*(.+)$')
-    if ($m.Success) { return "$($m.Groups[2].Value.Trim()) ($($m.Groups[1].Value))" }
-    return $full.Trim()
-}
+# Get-CourseName, Test-CourseSkipped (shared with setup.ps1 and the tests)
+. (Join-Path $PSScriptRoot 'common.ps1')
 
 function Get-SafeName([string]$s) {
     $s = ($s -replace '[\\/:*?"<>|]', '_').Trim().TrimEnd('.')
@@ -86,9 +80,7 @@ try {
     # courses to leave out entirely (moodleSkipCourses in config.json: course numbers, e.g. "5800030001")
     $skip = @($cfg.moodleSkipCourses | Where-Object { $_ } | ForEach-Object { [string]$_ })
     if ($skip.Count) {
-        $courses = @($courses | Where-Object {
-            $c = $_; -not ($skip | Where-Object { ([string]$c.fullname).Contains($_) -or ([string]$c.shortname).Contains($_) })
-        })
+        $courses = @($courses | Where-Object { -not (Test-CourseSkipped $_ $skip) })
     }
 
     $known = @{}

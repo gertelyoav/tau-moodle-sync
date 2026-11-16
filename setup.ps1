@@ -3,12 +3,15 @@
 #    on this computer can decrypt it). The key is never written in plain text and never leaves your
 #    computer except to the Moodle site itself.
 # 2. Finds your Google Drive folder and writes config.json.
-# 3. Creates a scheduled task that syncs every hour (07:00-23:00) and runs the first sync.
+# 3. Lets you leave out courses you don't need (e.g. the exam archive).
+# 4. Optional: phone notifications through a Claude routine (save-claude-token.ps1).
+# 5. Creates a scheduled task that syncs every hour, on the hour (07:00-23:00), and runs the first sync.
 
 $ErrorActionPreference = 'Stop'
 $root     = $PSScriptRoot
 $taskName = 'TAU-Moodle-Sync'
 $cfgFile  = Join-Path $root 'config.json'
+. (Join-Path $PSScriptRoot 'common.ps1')
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 
 function Ask-YesNo([string]$q) { do { $a = (Read-Host "$q [y/n]").Trim().ToLower() } until ($a -in 'y','n'); return $a -eq 'y' }
@@ -17,7 +20,7 @@ $cfg = if (Test-Path $cfgFile) { Get-Content $cfgFile -Raw -Encoding UTF8 | Conv
 $base = ([string]$cfg.moodleUrl).TrimEnd('/')
 
 Write-Host ''
-Write-Host '=== Step 1/3: your Moodle key ===' -ForegroundColor Cyan
+Write-Host '=== Step 1/5: your Moodle key ===' -ForegroundColor Cyan
 $tokenFile = Join-Path $root 'token.dat'
 $needKey = $true
 if (Test-Path $tokenFile) { $needKey = Ask-YesNo 'A Moodle key is already saved. Replace it?' }
@@ -82,13 +85,13 @@ if ($needKey) {
             ConvertTo-SecureString $key -AsPlainText -Force | ConvertFrom-SecureString | Set-Content -Path $tokenFile
             $saved = $true
         } catch { Write-Host "The key did not work ($($_.Exception.Message))." -ForegroundColor Yellow }
-        $key = $null
+        if (-not $saved) { $key = $null }
     }
     if (-not $saved) { Write-Host 'Could not get the Moodle key. Run setup.cmd again, or see "Troubleshooting" in README.md.' -ForegroundColor Red; exit 1 }
 }
 
 Write-Host ''
-Write-Host '=== Step 2/3: where to save the files ===' -ForegroundColor Cyan
+Write-Host '=== Step 2/5: where to save the files ===' -ForegroundColor Cyan
 $drives = @(Get-PSDrive -PSProvider FileSystem | ForEach-Object {
     foreach ($n in 'My Drive', 'האחסון שלי') { $p = Join-Path $_.Root $n; if (Test-Path -LiteralPath $p) { $p } }
 })
@@ -109,13 +112,53 @@ if (-not $target) {
     $custom = (Read-Host 'Folder to save the files in (Enter = the Moodle folder next to this script)').Trim()
     $target = if ($custom) { $custom } else { Join-Path $root 'Moodle' }
 }
-$cfg.moodleFolder = $target
-
-$cfg | ConvertTo-Json -Depth 5 | Set-Content -Path $cfgFile -Encoding UTF8
+Set-ConfigValue $cfg 'moodleFolder' $target
+Save-Config $cfg $cfgFile
 Write-Host "OK - files will be saved in $target" -ForegroundColor Green
 
 Write-Host ''
-Write-Host '=== Step 3/3: hourly sync ===' -ForegroundColor Cyan
+Write-Host '=== Step 3/5: courses to leave out ===' -ForegroundColor Cyan
+try {
+    if (-not $key) {
+        $sec = (Get-Content $tokenFile -Raw).Trim() | ConvertTo-SecureString
+        $key = [Runtime.InteropServices.Marshal]::PtrToStringBSTR([Runtime.InteropServices.Marshal]::SecureStringToBSTR($sec))
+    }
+    $site    = Test-MoodleKey $key
+    $courses = @(Invoke-RestMethod -Uri "$base/webservice/rest/server.php" -Method Post -TimeoutSec 60 `
+                   -Body @{ wstoken = $key; wsfunction = 'core_enrol_get_users_courses'; userid = $site.userid; moodlewsrestformat = 'json' } | ForEach-Object { $_ })
+    $current = @($cfg.moodleSkipCourses | Where-Object { $_ } | ForEach-Object { [string]$_ })
+    $default = $current
+    if (-not $current.Count) { $default = Get-SuggestedSkips $courses }
+    Write-Host 'All your Moodle courses are synced. You can leave out courses you do not need:'
+    for ($i = 0; $i -lt $courses.Count; $i++) {
+        $mark = ''; if (Test-CourseSkipped $courses[$i] $default) { $mark = '   <- suggested: leave out' }
+        Write-Host ("  {0}. {1}{2}" -f ($i + 1), (Get-CourseName ([string]$courses[$i].fullname)), $mark)
+    }
+    $hint = 'Enter = sync all'; if ($default.Count) { $hint = 'Enter = leave out the marked courses, 0 = sync all' }
+    $skip = $null
+    do {
+        $a = Read-Host "Numbers of the courses to leave out, separated by commas ($hint)"
+        try { $skip = Resolve-SkipAnswer $courses $a $default } catch { Write-Host $_.Exception.Message -ForegroundColor Yellow }
+    } until ($null -ne $skip)
+    Set-ConfigValue $cfg 'moodleSkipCourses' $skip
+    Save-Config $cfg $cfgFile
+    if ($skip.Count) { Write-Host "OK - leaving out: $($skip -join ', ')" -ForegroundColor Green } else { Write-Host 'OK - syncing all courses' -ForegroundColor Green }
+} catch {
+    $msg = $_.Exception.Message; if ($key) { $msg = $msg.Replace([string]$key, '[key]') }
+    Write-Host "Could not read your course list ($msg). Skipping this step; you can run setup.cmd again later." -ForegroundColor Yellow
+} finally { $key = $null }
+
+Write-Host ''
+Write-Host '=== Step 4/5: phone notifications (optional) ===' -ForegroundColor Cyan
+Write-Host 'Get a notification in the Claude app only when something new shows up (new item, updated file, new grade).'
+Write-Host 'Needs a Claude plan with routines. How to create the routine: skills\claude\notify-routine.md'
+$rtFile = Join-Path $root 'claude-routine-token.dat'
+$q = 'Set up phone notifications now? (you can also do it later with save-claude-token.cmd)'
+if ($cfg.claudeRoutineId -and (Test-Path $rtFile)) { $q = "Phone notifications are set up (routine $($cfg.claudeRoutineId)). Change them?" }
+if (Ask-YesNo $q) { & (Join-Path $root 'save-claude-token.ps1') }
+
+Write-Host ''
+Write-Host '=== Step 5/5: hourly sync ===' -ForegroundColor Cyan
 $sync = Join-Path $root 'moodle-sync.ps1'
 $user = [Security.Principal.WindowsIdentity]::GetCurrent().Name
 $action   = New-ScheduledTaskAction -Execute 'powershell.exe' -WorkingDirectory $root `
