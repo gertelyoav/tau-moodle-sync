@@ -3,3 +3,4 @@ config.json
 token.dat
 log.txt
 Moodle/
+claude-routine-token.dat

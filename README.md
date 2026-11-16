@@ -1,5 +1,17 @@
 # tau-moodle-sync
 
+> **In English:** a personal automation system that makes Tel Aviv University course material "AI-ready".
+> Every hour it syncs all of a student's Moodle courses to Google Drive through Moodle's REST API, keeps the folder
+> structure identical to the course pages, and writes an index that Claude / Gemini read first, so the AI can answer
+> questions from the actual lectures and homework and cite the file. It also tracks new activities, updated files and
+> grades, exports deadlines to Google Tasks, converts a course's public Notion site to Markdown + LaTeX, and can send a
+> phone notification through a Claude routine fired over HTTP **only** when something new appears (event-driven, no polling).
+>
+> **Highlights:** passwordless token retrieval via the official mobile-app login flow, credentials encrypted with Windows
+> DPAPI, incremental and resumable downloads (a failed file never aborts the run), silent first-sync for newly joined courses.
+> Built with Windows PowerShell 5.1 and no dependencies, designed and developed together with Claude Code.
+> The rest of this README is the (Hebrew) install guide for students.
+
 כלי שמוריד אוטומטית, כל שעה, את כל הקבצים מהקורסים שלך במודל של אוניברסיטת תל אביב לתיקייה בגוגל דרייב. הקבצים מסודרים כמו באתר הקורס, כדי שג'מיני או קלוד יוכלו לענות לך על שאלות מהחומר.
 
 כל אחד מוריד רק את החומר שלו, עם המפתח שלו, לדרייב שלו. אף קובץ קורס לא נמצא בריפו הזה.
@@ -57,11 +69,25 @@
 3. בתפריט שמשמאל מוסיפים את השירות של Google Tasks (`Services → + → Google Tasks API`).
 4. בוחרים את הפונקציה `setup` ולוחצים הפעלה (`Run`), ומאשרים את ההרשאות. גוגל יזהיר שהאפליקציה לא מאומתת, כי זה סקריפט שלכם (`Advanced → Go to project`).
 
+## תוספת: התראות לטלפון על דברים חדשים
+
+אפשר לקבל התראה לטלפון (באפליקציה של קלוד) רק כשהסנכרון מוצא משהו חדש: פריט חדש בקורס, קובץ שעודכן או ציון חדש. כשאין חדש, לא נשלח כלום.
+
+1. באתר של קלוד יוצרים רוטינה חדשה (`claude.ai/code/routines → New routine`), עם טריגר מסוג API בלבד, בלי תזמון, ועם התראות push.
+2. בהוראות של הרוטינה כותבים לה לקרוא את רשימת העדכונים שמגיעה ב-`<routine-fire-payload>` ולשלוח הודעה קצרה בעברית עם הכלי `PushNotification`. אם הרשימה ריקה, לא לשלוח כלום.
+3. לוחצים על יצירת מפתח (`Generate token`) ומעתיקים אותו. הוא מוצג פעם אחת בלבד.
+4. מריצים את `save-claude-token.cmd` ומדביקים את המפתח. הוא נשמר מוצפן, כמו המפתח למודל.
+5. ב-`config.json` כותבים את מזהה הרוטינה (מתחיל ב-`trig_`) בשדה `claudeRoutineId`.
+
+## דילוג על קורסים
+
+קורס ענק שלא צריך (למשל מאגר בחינות עם אלפי קבצים) אפשר להוציא מהסנכרון: ב-`config.json` מוסיפים את מספר הקורס לרשימה `moodleSkipCourses`, למשל `["5800030001"]`.
+
 ## אבטחה
 
 - המפתח שלך למודל נשמר מוצפן בקובץ `token.dat`, בהצפנה של Windows (DPAPI): רק המשתמש שלך במחשב הזה יכול לפענח אותו.
 - המפתח לא נשמר כטקסט רגיל, ונשלח רק לאתר המודל.
-- הקבצים האישיים חסומים מהעלאה לגיטהאב בקובץ `.gitignore`: `config.json`, `token.dat`, `log.txt`.
+- הקבצים האישיים חסומים מהעלאה לגיטהאב בקובץ `.gitignore`: `config.json`, `token.dat`, `claude-routine-token.dat`, `log.txt`.
 - הקוד קצר וגלוי: `moodle-sync.ps1` פונה רק לאתר המודל, ו-`notion-sync.ps1` פונה רק לאתר הנושן הציבורי של הקורס.
 - להסרה מריצים את `uninstall.cmd`: הוא מוחק את הסנכרון ואת המפתח השמור.
 - לביטול מלא של המפתח: בדף "מפתחות אבטחה" במודל לוחצים "איפוס" בשורה של שירות האפליקציה (`Moodle mobile web service`). שימו לב: אחרי האיפוס צריך להתחבר מחדש לאפליקציית Moodle בטלפון ובטאבלט.
@@ -96,5 +122,6 @@
 | `notion-sync.ps1` | העתקת אתר קורס ציבורי בנושן לקבצי Markdown |
 | `sync-now.cmd` | הרצה ידנית |
 | `uninstall.cmd` | הסרה |
+| `save-claude-token.cmd` | שמירה מוצפנת של המפתח לרוטינת ההתראות של קלוד (אופציונלי) |
 | `skills/` | סקילים מוכנים לג'מיני ולקלוד |
 | `google-tasks/Code.gs` | סקריפט שמוסיף את מועדי ההגשה ל-Google Tasks |

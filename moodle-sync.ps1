@@ -83,6 +83,13 @@ try {
 
     $site = Invoke-Moodle 'core_webservice_get_site_info'
     $courses = Invoke-Moodle 'core_enrol_get_users_courses' @{ userid = $site.userid }
+    # courses to leave out entirely (moodleSkipCourses in config.json: course numbers, e.g. "5800030001")
+    $skip = @($cfg.moodleSkipCourses | Where-Object { $_ } | ForEach-Object { [string]$_ })
+    if ($skip.Count) {
+        $courses = @($courses | Where-Object {
+            $c = $_; -not ($skip | Where-Object { ([string]$c.fullname).Contains($_) -or ([string]$c.shortname).Contains($_) })
+        })
+    }
 
     $known = @{}
     if (Test-Path $index) {
@@ -114,10 +121,11 @@ try {
         # returns $true if this key/value is new or changed (and records it)
         $isNew = -not $script:seen.ContainsKey($key) -or $script:seen[$key] -ne $value
         $script:seen[$key] = $value
-        return ($isNew -and -not $script:firstRun)
+        return ($isNew -and -not $script:firstRun -and -not $script:courseFirst)
     }
     $typeNames = @{ quiz = 'בוחן'; assign = 'מטלה'; resource = 'קובץ'; folder = 'תיקיית קבצים'; url = 'קישור'; forum = 'פורום'; page = 'דף'; lti = 'כלי חיצוני' }
 
+    $courseFirst = $false
     $courseDirs = New-Object System.Collections.ArrayList
     $cmPlace = @{}   # course module id -> its section folder and number (for assignment attachments)
     foreach ($c in $courses) {
@@ -126,6 +134,12 @@ try {
         [void]$courseDirs.Add($courseDir)
         try { $sections = Invoke-Moodle 'core_course_get_contents' @{ courseid = $c.id } }
         catch { Write-Log "could not read course '$($c.fullname)': $($_.Exception.Message)"; continue }
+        # a course seen for the first time: record its items silently (no notification per existing item)
+        # (a course counts as new only if none of its items were seen before - older seen.json files have no course: keys)
+        $knownCourse = $seen.ContainsKey("course:$($c.id)") -or @($sections | ForEach-Object { $_.modules } | Where-Object { $_ -and $seen.ContainsKey("mod:$($_.id)") }).Count -gt 0
+        $script:courseFirst = -not $firstRun -and -not $knownCourse
+        $seen["course:$($c.id)"] = '1'
+        if ($script:courseFirst) { Write-Log "new course '$cname': change tracking initialised (no notifications for existing items)" }
 
         foreach ($s in $sections) {
             # folders and files are numbered in the order they appear on the Moodle course page
@@ -155,12 +169,25 @@ try {
                         timemodified = [int64]$f.timemodified; size = [int64]$f.filesize
                         downloadedAt = $(if ($prev) { $prev.downloadedAt } else { $null })
                     }
-                    $upToDate = $prev -and ([int64]$prev.timemodified -eq [int64]$f.timemodified) -and (Test-Path -LiteralPath $dest)
+                    $onDisk = Test-Path -LiteralPath $dest
+                    $upToDate = $onDisk -and (
+                        ($prev -and ([int64]$prev.timemodified -eq [int64]$f.timemodified)) -or
+                        # already downloaded by an earlier run that crashed before saving index.json
+                        (-not $prev -and (Get-Item -LiteralPath $dest).Length -eq [int64]$f.filesize))
                     if (-not $upToDate) {
                         New-Item -ItemType Directory -Force -Path $sub | Out-Null
                         $url = [string]$f.fileurl
                         $url += $(if ($url.Contains('?')) { '&' } else { '?' }) + 'token=' + $token
-                        $tmpDl = [IO.Path]::GetTempFileName(); Invoke-WebRequest -Uri $url -OutFile $tmpDl -UseBasicParsing -TimeoutSec 300; Move-Item -LiteralPath $tmpDl -Destination $dest -Force
+                        $tmpDl = [IO.Path]::GetTempFileName()
+                        try {
+                            Invoke-WebRequest -Uri $url -OutFile $tmpDl -UseBasicParsing -TimeoutSec 300; Move-Item -LiteralPath $tmpDl -Destination $dest -Force
+                        } catch {
+                            # one failed file must not stop the whole sync; it is retried next run
+                            Remove-Item -LiteralPath $tmpDl -Force -ErrorAction SilentlyContinue
+                            Write-Log "could not download: $rel ($($_.Exception.Message -replace [regex]::Escape($token), '[key]'))"
+                            if ($prev) { [void]$entries.Add($prev) }
+                            continue
+                        }
                         $entry.downloadedAt = (Get-Date).ToString('yyyy-MM-dd HH:mm')
                         $new++
                         Write-Log "downloaded: $rel"
@@ -268,7 +295,31 @@ try {
     $notion = Join-Path $root 'notion-sync.ps1'
     # only for courses you are enrolled in (matched by the Moodle course number in notionCourses)
     $enrolled = @($courses | ForEach-Object { "$($_.fullname) $($_.shortname) $($_.idnumber)" })
-    if ($cfg.notionCourses -and (Test-Path $notion)) { & $notion -OutRoot $outRoot -Enrolled $enrolled }
+    if ($cfg.notionCourses -and (Test-Path $notion)) {
+        try { & $notion -OutRoot $outRoot -Enrolled $enrolled } catch { Write-Log "notion sync failed: $($_.Exception.Message)" }
+    }
+
+    # ---- optional phone notification: fire a Claude routine ONLY when this run found something new ----
+    # (claudeRoutineId in config.json + the routine's API token, saved encrypted by save-claude-token.cmd)
+    $rtFile = Join-Path $root 'claude-routine-token.dat'
+    if ($cfg.claudeRoutineId -and (Test-Path $rtFile)) {
+        $runStart = [DateTimeOffset]::Parse($nowIso)
+        $fresh = @(Read-JsonList $updFile | Where-Object {
+            try { [DateTimeOffset]::Parse([string]$_.detectedAt) -ge $runStart } catch { $false } })
+        if ($fresh.Count) {
+            try {
+                $sec = (Get-Content $rtFile -Raw).Trim() | ConvertTo-SecureString
+                $rt  = [Runtime.InteropServices.Marshal]::PtrToStringBSTR([Runtime.InteropServices.Marshal]::SecureStringToBSTR($sec))
+                $payload = ConvertTo-Json -InputObject ([object[]]$fresh) -Depth 4
+                $body = [Text.Encoding]::UTF8.GetBytes((@{ text = $payload } | ConvertTo-Json -Depth 3))
+                Invoke-RestMethod -Method Post -Uri "https://api.anthropic.com/v1/claude_code/routines/$($cfg.claudeRoutineId)/fire" `
+                    -Headers @{ Authorization = "Bearer $rt"; 'anthropic-version' = '2023-06-01' } `
+                    -ContentType 'application/json; charset=utf-8' -Body $body -TimeoutSec 60 | Out-Null
+                Write-Log "phone notification sent ($($fresh.Count) update(s))"
+            } catch { Write-Log "could not send phone notification: $($_.Exception.Message)" }
+            finally { $rt = $null }
+        }
+    }
 }
 catch {
     $msg = $_.Exception.Message -replace $(if ($token) { [regex]::Escape([string]$token) } else { '(?!)' }), '[key]'

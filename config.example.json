@@ -2,6 +2,8 @@
   "moodleUrl": "https://moodle.tau.ac.il",
   "moodleFolder": "",
   "moodleMaxFileMB": 100,
+  "moodleSkipCourses": [],
+  "claudeRoutineId": "",
   "notionCourses": [
     {
       "name": "מבוא לאופטימיזציה למדעי המחשב",
