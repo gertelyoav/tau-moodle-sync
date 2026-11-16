@@ -1,0 +1,38 @@
+name: דיווח על תקלה
+description: משהו לא עובד בהתקנה או בסנכרון
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        **לפני השליחה:** אל תדביקו כאן את `token.dat`, את `claude-routine-token.dat` או את `config.json`, ואל תדביקו מפתח (מחרוזת ארוכה של אותיות ומספרים או `sk-ant-...`).
+        הלוג (`log.txt`) לא כולל את המפתח, אבל הוא כולל שמות של קורסים וקבצים. מחקו מה שלא רוצים לשתף.
+  - type: dropdown
+    id: where
+    attributes:
+      label: איפה זה קרה?
+      options:
+        - בהתקנה (setup.cmd)
+        - בסנכרון השעתי או ב-sync-now.cmd
+        - בהתראות לטלפון
+        - בחיבור לג'מיני או לקלוד
+        - משהו אחר
+    validations:
+      required: true
+  - type: textarea
+    id: what
+    attributes:
+      label: מה קרה, ומה ציפיתם שיקרה?
+    validations:
+      required: true
+  - type: textarea
+    id: log
+    attributes:
+      label: השורות הרלוונטיות מ-log.txt
+      description: הקובץ נמצא בתיקיית הכלי. מספיקות השורות האחרונות, סביב השגיאה.
+      render: text
+  - type: input
+    id: windows
+    attributes:
+      label: גרסת ווינדוס
+      placeholder: Windows 11
